@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VoiceCloner Setup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    padding: 2rem;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+  h1 { font-size: 1.8rem; margin-bottom: 0.5rem; color: #e94560; }
+  #status {
+    font-size: 0.95rem;
+    color: #aaa;
+    margin: 1rem 0;
+    text-align: center;
+    min-height: 1.5em;
+  }
+  #log {
+    width: 100%;
+    max-height: 150px;
+    overflow-y: auto;
+    background: #0f0f23;
+    border-radius: 8px;
+    padding: 0.75rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.75rem;
+    color: #888;
+    margin-top: 0.5rem;
+    line-height: 1.4;
+  }
+  .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid #333;
+    border-top-color: #e94560;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 1rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #model-choice {
+    display: none;
+    text-align: center;
+    margin-top: 1rem;
+  }
+  #model-choice p { margin-bottom: 1rem; font-size: 0.9rem; color: #ccc; }
+  button {
+    -webkit-app-region: no-drag;
+    padding: 0.6rem 1.5rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    margin: 0 0.5rem;
+    transition: background 0.2s;
+  }
+  .btn-primary { background: #e94560; color: #fff; }
+  .btn-primary:hover { background: #c73a52; }
+  .btn-secondary { background: #333; color: #ccc; }
+  .btn-secondary:hover { background: #444; }
+  #error {
+    display: none;
+    color: #e94560;
+    background: rgba(233,69,96,0.1);
+    padding: 1rem;
+    border-radius: 8px;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    width: 100%;
+  }
+</style>
+</head>
+<body>
+  <h1>VoiceCloner</h1>
+  <div class="spinner" id="spinner"></div>
+  <div id="status">Initializing...</div>
+  <div id="model-choice">
+    <p>Download AI models now (~4.6 GB)?<br>
+    <small>You can also download them later on first use.</small></p>
+    <button class="btn-primary" onclick="choose('download')">Download Now</button>
+    <button class="btn-secondary" onclick="choose('skip')">Download Later</button>
+  </div>
+  <div id="log"></div>
+  <div id="error"></div>
+
+<script>
+  const statusEl = document.getElementById('status');
+  const logEl = document.getElementById('log');
+  const spinnerEl = document.getElementById('spinner');
+  const modelChoiceEl = document.getElementById('model-choice');
+  const errorEl = document.getElementById('error');
+
+  window.voicecloner.onStatus((msg) => {
+    statusEl.textContent = msg;
+  });
+
+  window.voicecloner.onLog((msg) => {
+    const line = document.createElement('div');
+    line.textContent = msg;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  });
+
+  window.voicecloner.onAskModels(() => {
+    spinnerEl.style.display = 'none';
+    modelChoiceEl.style.display = 'block';
+    statusEl.textContent = 'Setup complete!';
+  });
+
+  window.voicecloner.onError((msg) => {
+    spinnerEl.style.display = 'none';
+    errorEl.style.display = 'block';
+    errorEl.textContent = 'Error: ' + msg;
+  });
+
+  function choose(choice) {
+    modelChoiceEl.style.display = 'none';
+    spinnerEl.style.display = 'block';
+    statusEl.textContent = choice === 'download' ? 'Downloading models...' : 'Starting...';
+    window.voicecloner.chooseModels(choice);
+  }
+</script>
+</body>
+</html>

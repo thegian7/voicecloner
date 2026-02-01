@@ -1,0 +1,53 @@
+appId: com.voicecloner.app
+productName: VoiceCloner
+directories:
+  output: release
+
+files:
+  - dist/electron/**/*
+  - electron/splash.html
+  - "!node_modules/**/*"
+
+extraResources:
+  - from: python/
+    to: python/
+    filter:
+      - "**/*.py"
+      - "requirements.txt"
+
+mac:
+  extraResources:
+    - from: vendor/python-mac-${arch}/
+      to: vendor/python/
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  hardenedRuntime: true
+  entitlements: null
+  entitlementsInherit: null
+
+win:
+  extraResources:
+    - from: vendor/python-win-x64/
+      to: vendor/python/
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+linux:
+  extraResources:
+    - from: vendor/python-linux-x64/
+      to: vendor/python/
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  category: AudioVideo
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

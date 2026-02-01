@@ -1,0 +1,10 @@
+node_modules/
+dist/
+release/
+vendor/
+.venv/
+__pycache__/
+*.pyc
+*.wav
+*.mp3
+.DS_Store
