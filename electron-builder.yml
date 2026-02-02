@@ -14,6 +14,10 @@ extraResources:
     filter:
       - "**/*.py"
       - "requirements.txt"
+  - from: core/
+    to: python/core/
+    filter:
+      - "**/*.py"
 
 mac:
   extraResources:
@@ -26,8 +30,8 @@ mac:
         - arm64
         - x64
   hardenedRuntime: true
-  entitlements: null
-  entitlementsInherit: null
+  entitlements: entitlements.mac.plist
+  entitlementsInherit: entitlements.mac.plist
 
 win:
   extraResources:

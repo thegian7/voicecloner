@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, session, systemPreferences } from "electron";
 import { ChildProcess, spawn, execSync } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
@@ -357,6 +357,18 @@ ipcMain.handle("setup:skip-models", () => {
 
 app.whenReady().then(async () => {
   try {
+    // Grant microphone permission to Gradio's web content
+    if (process.platform === "darwin") {
+      await systemPreferences.askForMediaAccess("microphone");
+    }
+    session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+      if (permission === "media") {
+        callback(true);
+        return;
+      }
+      callback(false);
+    });
+
     if (!isSetupComplete()) {
       createSplashWindow();
       await runSetup();
