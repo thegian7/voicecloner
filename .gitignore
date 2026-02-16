@@ -10,3 +10,14 @@ __pycache__/
 .DS_Store
 *.log
 python/venv/
+
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
+settings.local.json
