@@ -1,7 +1,7 @@
 {
   "name": "voicecloner",
   "version": "1.0.0",
-  "description": "Clone your voice locally with Qwen3-TTS",
+  "description": "Clone your voice locally with VoxCPM2",
   "main": "dist/electron/main.js",
   "scripts": {
     "build:ts": "tsc",
