@@ -27,9 +27,9 @@ fi
 source "$VENV_DIR/bin/activate"
 
 # Install dependencies if needed
-if ! python -c "import qwen_tts" &>/dev/null; then
+if ! python -c "import voxcpm" &>/dev/null; then
     echo "Installing dependencies (first run only)..."
-    pip install -U qwen-tts soundfile
+    pip install -U -r "$SCRIPT_DIR/requirements.txt"
 fi
 
 echo "Starting VoiceCloner at http://localhost:7860"

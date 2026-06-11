@@ -7,7 +7,7 @@ import tempfile
 import soundfile as sf
 import gradio as gr
 
-from core import ModelCache, run_voice_design, create_clone_prompt, generate_preview, save_wav
+from core import ModelCache, create_clone_prompt, generate_preview, save_wav
 from .state import TEMP_DIR
 
 
@@ -35,10 +35,8 @@ def setup_voice(
     else:
         ref_audio_path = ref_audio
 
-    if use_design and style.strip():
-        run_voice_design(cache.design, style)
-
-    prompt = create_clone_prompt(cache.clone, ref_audio_path, ref_text)
+    style_arg = style if (use_design and style.strip()) else ""
+    prompt = create_clone_prompt(cache.clone, ref_audio_path, ref_text, style=style_arg)
     return prompt, "Voice ready. You can preview or proceed to generation."
 
 

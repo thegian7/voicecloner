@@ -1,8 +1,8 @@
-qwen-tts>=0.0.2
+voxcpm>=2.0.3
 soundfile>=0.12.0
 gradio>=4.0.0
 huggingface-hub>=0.20.0
-torch>=2.1.0
+torch>=2.5.0
 numpy>=1.24.0
 pydub>=0.25.1
 inflect>=7.0.0

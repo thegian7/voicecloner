@@ -1,6 +1,6 @@
 # VoiceCloner
 
-Clone your voice locally with [Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS). No data leaves your machine.
+Clone your voice locally with [VoxCPM2](https://huggingface.co/openbmb/VoxCPM2). No data leaves your machine.
 
 Record a few seconds of your voice, then generate speech in your voice from any text. Includes a full audiobook production mode for long-form content.
 
@@ -9,13 +9,13 @@ Record a few seconds of your voice, then generate speech in your voice from any 
 - **Quick Clone** -- Record or upload 5-10 seconds of your voice, type text, get speech output
 - **Audiobook Mode** -- Load an EPUB or paste text, chunk it into chapters, generate and review audio per-chunk, export a stitched audiobook
 - **Voice Library** -- Save and manage multiple cloned voices
-- **VoiceDesign** -- Optional style descriptions to control tone and delivery
-- **Export** -- WAV, MP3, FLAC, M4A output formats
+- **Style prompts** -- Natural-language voice descriptions ("warm energetic podcast host") that condition the clone
+- **Export** -- WAV, MP3, FLAC, M4A output formats (48 kHz studio quality)
 - **Runs locally** -- All inference happens on your machine (MPS/CUDA/CPU)
 
 ## Quick Start (Python)
 
-Requires Python 3.12+.
+Requires Python 3.10-3.12 (VoxCPM2 doesn't support 3.13 yet).
 
 ```bash
 git clone https://github.com/thegian7/voicecloner.git
@@ -55,7 +55,7 @@ This bundles a standalone Python runtime (downloaded via `npm run download-pytho
 
 ## TTS API Server
 
-`tts_server.py` exposes an OpenAI-compatible `/v1/audio/speech` endpoint using your cloned voice. Useful for integrating with other tools.
+`tts_server.py` exposes an OpenAI-compatible `/v1/audio/speech` endpoint using your cloned voice (powered by VoxCPM2). Useful for integrating with other tools.
 
 ```bash
 source .venv/bin/activate
@@ -81,7 +81,7 @@ start.sh                # One-command launcher
 - **AMD GPU**: ROCm 6.2+ supported.
 - **CPU**: Works but slow. 32GB RAM recommended.
 
-Models are downloaded from Hugging Face on first run (~2GB).
+Models are downloaded from Hugging Face on first run (~5GB).
 
 ## License
 

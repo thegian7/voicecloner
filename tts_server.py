@@ -2,13 +2,15 @@
 """
 TTS API Server for Claude Code Voice Integration
 
-Exposes an OpenAI-compatible /v1/audio/speech endpoint that uses Qwen3-TTS
-with your cloned voice. Plays audio through system speakers.
+Exposes an OpenAI-compatible /v1/audio/speech endpoint that uses VoxCPM2
+with your cloned voice. Streams audio directly to ffplay/sox for low-latency
+local playback — no WAV file on disk, no buffering the full waveform.
 
 Usage:
     python tts_server.py                    # Default voice (reference.wav)
     python tts_server.py --voice "MyVoice"  # Use saved voice by name
     python tts_server.py --port 8000        # Custom port
+    python tts_server.py --no-autoplay      # Headless mode (no local playback)
 
 Then configure Claude Code hook:
     export TTS_URL="http://localhost:8765/v1/audio/speech"
@@ -16,23 +18,24 @@ Then configure Claude Code hook:
 
 import argparse
 import io
+import json
 import os
+import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
+
+import numpy as np
+import soundfile as sf
 
 # Add parent dir to path for core module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import (
     ModelCache,
-    run_voice_design,
     create_clone_prompt,
-    generate_full,
-    save_wav,
+    generate_stream,
     load_voice,
     list_voices,
 )
@@ -41,69 +44,118 @@ from core import (
 cache = None
 voice_prompt = None
 current_voice_name = None
+autoplay_enabled = True
+player_bin = None
 
-DEFAULT_STYLE = (
-    "A young excited American male with a warm energetic tone, "
-    "speaking with enthusiasm and confidence like a podcast host"
-)
+DEFAULT_STYLE = ""  # Reference audio carries the voice; long style descriptions
+                    # leak into the spoken output. Use VoiceDesign mode (no ref)
+                    # if you want a styled non-cloned voice.
 
 # Default reference audio (fallback)
 DEFAULT_REF_AUDIO = os.path.join(os.path.dirname(__file__), "reference_excited.wav")
 DEFAULT_REF_TEXT = "Hello! What up everybody, hope you are having an awesome day!"
 
+# OpenAI /v1/audio/speech response_format -> (content-type, ffmpeg/pydub format)
+_AUDIO_FORMATS = {
+    "wav": ("audio/wav", None),
+    "mp3": ("audio/mpeg", "mp3"),
+    "opus": ("audio/ogg", "opus"),
+    "aac": ("audio/aac", "adts"),
+    "flac": ("audio/flac", "flac"),
+    "ogg": ("audio/ogg", "ogg"),
+    "pcm": ("audio/wav", None),
+}
 
-def play_audio(wav_path: str):
-    """Play audio through system speakers (macOS/Linux)."""
-    if sys.platform == "darwin":
-        subprocess.Popen(["afplay", wav_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    elif sys.platform == "linux":
-        subprocess.Popen(["aplay", "-q", wav_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        print(f"Audio saved to {wav_path} (auto-play not supported on this platform)")
+
+def _encode_audio(audio: "np.ndarray", sr: int, fmt: str) -> tuple[bytes, str]:
+    """Encode a float waveform to the requested container. Returns (bytes, content_type)."""
+    fmt = (fmt or "mp3").lower()
+    content_type, ff_fmt = _AUDIO_FORMATS.get(fmt, _AUDIO_FORMATS["mp3"])
+
+    wav_buf = io.BytesIO()
+    sf.write(wav_buf, audio, sr, format="WAV", subtype="PCM_16")
+    wav_bytes = wav_buf.getvalue()
+    if ff_fmt is None:  # wav / pcm — return as-is
+        return wav_bytes, content_type
+
+    # Transcode via ffmpeg (installed) for compressed formats.
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", ff_fmt, "pipe:1"],
+        input=wav_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        # Fall back to WAV rather than failing the request.
+        return wav_bytes, "audio/wav"
+    return proc.stdout, content_type
 
 
-def init_voice(voice_name: str = None, ref_audio: str = None, ref_text: str = None, style: str = None, fast_mode: bool = True):
-    """Initialize the TTS model with a voice."""
+def _find_player() -> str | None:
+    """Find a pipe-capable audio player. ffplay preferred, then sox 'play'."""
+    for cmd in ("ffplay", "play"):
+        path = shutil.which(cmd)
+        if path:
+            return path
+    return None
+
+
+def _player_args(player: str, sample_rate: int) -> list[str]:
+    """Build CLI args to pipe raw float32 mono PCM into the given player."""
+    if player.endswith("ffplay"):
+        # ffmpeg 8.x renamed -ac to -ch_layout. Use the new spelling.
+        return [
+            player,
+            "-f", "f32le", "-ar", str(sample_rate), "-ch_layout", "mono",
+            "-nodisp", "-autoexit", "-loglevel", "error",
+            "-i", "-",
+        ]
+    if player.endswith("play"):
+        # sox play
+        return [
+            player,
+            "-q",
+            "-t", "raw", "-r", str(sample_rate), "-b", "32", "-e", "float", "-c", "1",
+            "-",
+        ]
+    raise RuntimeError(f"Unsupported player: {player}")
+
+
+def stream_to_player(chunk_iter, sample_rate: int) -> int:
+    """Pipe audio chunks to the configured player. Returns total samples written."""
+    proc = subprocess.Popen(
+        _player_args(player_bin, sample_rate),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=None,  # let player errors surface in server logs
+    )
+    total = 0
+    try:
+        for chunk, _ in chunk_iter:
+            try:
+                proc.stdin.write(chunk.astype("float32").tobytes())
+                proc.stdin.flush()
+            except BrokenPipeError:
+                # Player exited (user killed it, autoexit fired, etc.) — stop.
+                break
+            total += len(chunk)
+    finally:
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    return total
+
+
+def init_voice(voice_name: str = None, ref_audio: str = None, ref_text: str = None, style: str = None):
+    """Initialize the TTS model and build the voice prompt."""
     global cache, voice_prompt, current_voice_name
 
-    print("Loading Qwen3-TTS model (fast mode)..." if fast_mode else "Loading Qwen3-TTS models...")
-
-    # Fast mode: skip VoiceDesign, use float16
-    if fast_mode:
-        import torch
-        from qwen_tts import Qwen3TTSModel
-        from core.device import get_device
-
-        device = get_device()
-        print(f"Loading Clone model on {device} with SDPA attention...")
-
-        # Load clone model with SDPA attention for faster inference
-        # (float32 required for MPS stability, float16 causes NaN)
-        clone_model = Qwen3TTSModel.from_pretrained(
-            "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-            device_map=device,
-            dtype=torch.float32,
-            attn_implementation="sdpa"  # Use PyTorch's scaled dot-product attention
-        )
-
-        # Optionally compile the model for faster inference (requires PyTorch 2.0+)
-        try:
-            if hasattr(torch, 'compile') and device != "mps":  # torch.compile has issues on MPS
-                print("Compiling model with torch.compile...")
-                clone_model.model = torch.compile(clone_model.model, mode="reduce-overhead")
-        except Exception as e:
-            print(f"torch.compile not available or failed: {e}")
-
-        # Create a simple object to hold the model
-        class FastCache:
-            def __init__(self, clone):
-                self.clone = clone
-        cache = FastCache(clone_model)
-    else:
-        cache = ModelCache()
+    cache = ModelCache()
 
     if voice_name:
-        # Load saved voice
         voices = [v.name for v in list_voices()]
         if voice_name not in voices:
             print(f"Voice '{voice_name}' not found. Available: {voices}")
@@ -112,16 +164,16 @@ def init_voice(voice_name: str = None, ref_audio: str = None, ref_text: str = No
         v = load_voice(voice_name)
         ref_audio = v.ref_audio_path
         ref_text = v.ref_text
-        style = v.style
-        use_design = v.use_design and not fast_mode
+        # Saved voices may have a style, but with a reference audio the style
+        # gets read aloud rather than acting as a cue. Honor explicit override
+        # via --style, otherwise leave empty.
+        style = style if style is not None else ""
         current_voice_name = voice_name
         print(f"Loaded voice: {voice_name}")
     else:
-        # Use provided or default reference
         ref_audio = ref_audio or DEFAULT_REF_AUDIO
         ref_text = ref_text or DEFAULT_REF_TEXT
-        style = style or DEFAULT_STYLE
-        use_design = not fast_mode
+        style = style if style is not None else DEFAULT_STYLE
         current_voice_name = "default"
         print(f"Using reference audio: {ref_audio}")
 
@@ -129,14 +181,9 @@ def init_voice(voice_name: str = None, ref_audio: str = None, ref_text: str = No
         print(f"Reference audio not found: {ref_audio}")
         sys.exit(1)
 
-    # Run voice design if enabled (skipped in fast mode)
-    if use_design and style and hasattr(cache, 'design'):
-        print(f"Applying voice style: {style[:50]}...")
-        run_voice_design(cache.design, style)
-
-    # Create clone prompt
-    print("Building voice clone prompt...")
-    voice_prompt = create_clone_prompt(cache.clone, ref_audio, ref_text)
+    # Touch the lazy property so the model loads now (not on first request).
+    _ = cache.tts
+    voice_prompt = create_clone_prompt(cache.tts, ref_audio, ref_text, style=style)
     print("Voice ready!")
 
 
@@ -144,7 +191,6 @@ class TTSHandler(BaseHTTPRequestHandler):
     """Handle TTS API requests."""
 
     def log_message(self, format, *args):
-        # Quieter logging
         pass
 
     def do_POST(self):
@@ -155,23 +201,21 @@ class TTSHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok", "voice": current_voice_name}).encode())
+            self._json(200, {"status": "ok", "voice": current_voice_name, "player": player_bin})
         elif self.path == "/voices":
-            voices = [v.name for v in list_voices()]
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"voices": voices}).encode())
+            self._json(200, {"voices": [v.name for v in list_voices()]})
         else:
             self.send_error(404)
 
-    def handle_speech(self):
-        global cache, voice_prompt
+    def _json(self, code: int, payload: dict):
+        body = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-        # Read request body
+    def handle_speech(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
 
@@ -189,27 +233,30 @@ class TTSHandler(BaseHTTPRequestHandler):
         print(f"TTS: {text[:80]}...")
 
         try:
-            # Generate audio
-            audio, sr = generate_full(text, cache.clone, voice_prompt)
+            chunk_iter = generate_stream(text, cache.tts, voice_prompt)
+            sr = int(cache.tts.tts_model.sample_rate)
 
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                wav_path = f.name
-            save_wav(wav_path, audio, sr)
-
-            # Play audio in background thread
-            threading.Thread(target=play_audio, args=(wav_path,), daemon=True).start()
-
-            # Return audio data
-            with open(wav_path, "rb") as f:
-                audio_data = f.read()
-
-            self.send_response(200)
-            self.send_header("Content-Type", "audio/wav")
-            self.send_header("Content-Length", str(len(audio_data)))
-            self.end_headers()
-            self.wfile.write(audio_data)
-
+            if autoplay_enabled and player_bin:
+                samples = stream_to_player(chunk_iter, sr)
+                self._json(200, {
+                    "status": "ok",
+                    "samples": samples,
+                    "duration": round(samples / sr, 2),
+                    "sample_rate": sr,
+                })
+            else:
+                # Headless / server mode: buffer the full waveform and return it
+                # as encoded audio bytes (OpenAI /v1/audio/speech contract), so
+                # remote callers like Hermes can attach it to a voice message.
+                parts = [np.asarray(chunk, dtype=np.float32).reshape(-1) for chunk, _ in chunk_iter]
+                audio = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+                fmt = (data.get("response_format") or "mp3").lower()
+                payload, content_type = _encode_audio(audio, sr, fmt)
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
         except Exception as e:
             print(f"TTS error: {e}")
             self.send_error(500, str(e))
@@ -221,9 +268,21 @@ def main():
     parser.add_argument("--voice", type=str, help="Name of saved voice to use")
     parser.add_argument("--ref", type=str, help="Path to reference audio file")
     parser.add_argument("--ref-text", type=str, help="Transcript of reference audio")
-    parser.add_argument("--style", type=str, help="Voice style description")
+    parser.add_argument("--style", type=str, help="Voice style description (only honored with no reference audio)")
     parser.add_argument("--list-voices", action="store_true", help="List saved voices and exit")
+    parser.add_argument("--no-autoplay", action="store_true", help="Don't play audio locally (headless / server mode)")
     args = parser.parse_args()
+
+    global autoplay_enabled, player_bin
+    autoplay_enabled = not args.no_autoplay
+    player_bin = _find_player()
+
+    if autoplay_enabled and not player_bin:
+        print("Warning: no audio player found (need ffplay or sox 'play').")
+        print("  brew install ffmpeg   # for ffplay")
+        print("  brew install sox      # for play")
+        print("Falling back to headless mode.")
+        autoplay_enabled = False
 
     if args.list_voices:
         voices = list_voices()
@@ -235,7 +294,6 @@ def main():
                 print(f"  - {v.name}")
         return
 
-    # Initialize voice
     init_voice(
         voice_name=args.voice,
         ref_audio=args.ref,
@@ -243,9 +301,9 @@ def main():
         style=args.style,
     )
 
-    # Start server
     server = HTTPServer(("0.0.0.0", args.port), TTSHandler)
-    print(f"\nTTS Server running on http://localhost:{args.port}")
+    mode = "streaming via " + player_bin if autoplay_enabled else "headless"
+    print(f"\nTTS Server running on http://localhost:{args.port} ({mode})")
     print(f"Endpoint: http://localhost:{args.port}/v1/audio/speech")
     print("\nTo use with Claude Code, set:")
     print(f'  export TTS_URL="http://localhost:{args.port}/v1/audio/speech"')

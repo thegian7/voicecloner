@@ -9,5 +9,5 @@ cd "$SCRIPT_DIR"
 source .venv/bin/activate
 
 # Start TTS server
-echo "Starting Qwen3-TTS server for Claude Code..."
+echo "Starting VoxCPM2 TTS server for Claude Code..."
 python tts_server.py "$@"

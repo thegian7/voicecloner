@@ -1,5 +1,5 @@
 """
-VoiceCloner — Clone your voice locally with Qwen3-TTS.
+VoiceCloner — Clone your voice locally with VoxCPM2.
 Quick Clone + My Voices (no audiobook features).
 Run: python app.py
 """
@@ -12,7 +12,6 @@ import gradio as gr
 
 from core import (
     ModelCache,
-    run_voice_design,
     create_clone_prompt,
     generate_full,
     generate_preview,
@@ -86,11 +85,9 @@ def generate_speech(text, ref_audio, ref_text, style, use_design, fmt):
         raise gr.Error("Please record or upload reference audio.")
 
     ref_audio_path = _resolve_audio(ref_audio)
+    style_arg = style if (use_design and style.strip()) else ""
 
-    if use_design and style.strip():
-        run_voice_design(cache.design, style)
-
-    voice_clone_prompt = create_clone_prompt(cache.clone, ref_audio_path, ref_text)
+    voice_clone_prompt = create_clone_prompt(cache.clone, ref_audio_path, ref_text, style=style_arg)
     audio, sr = generate_full(text, cache.clone, voice_clone_prompt)
 
     out_path = os.path.join(TEMP_DIR, "quick_clone_output.wav")
@@ -105,11 +102,9 @@ def preview_speech(text, ref_audio, ref_text, style, use_design):
         raise gr.Error("Please record or upload reference audio.")
 
     ref_audio_path = _resolve_audio(ref_audio)
+    style_arg = style if (use_design and style.strip()) else ""
 
-    if use_design and style.strip():
-        run_voice_design(cache.design, style)
-
-    voice_clone_prompt = create_clone_prompt(cache.clone, ref_audio_path, ref_text)
+    voice_clone_prompt = create_clone_prompt(cache.clone, ref_audio_path, ref_text, style=style_arg)
     audio, sr = generate_preview(text, cache.clone, voice_clone_prompt)
 
     out_path = os.path.join(TEMP_DIR, "preview.wav")
@@ -170,7 +165,7 @@ def _render_voices_list():
 
 
 with gr.Blocks(title="VoiceCloner") as app:
-    gr.Markdown("# VoiceCloner\nClone your voice locally with Qwen3-TTS. No data leaves your machine.")
+    gr.Markdown("# VoiceCloner\nClone your voice locally with VoxCPM2. No data leaves your machine.")
 
     with gr.Tab("Quick Clone"):
         with gr.Row():
@@ -192,7 +187,7 @@ with gr.Blocks(title="VoiceCloner") as app:
                     lines=2,
                 )
                 gr.Markdown("### 2. Style (optional)")
-                qc_use_design = gr.Checkbox(label="Use VoiceDesign for style", value=True)
+                qc_use_design = gr.Checkbox(label="Apply style prompt", value=True)
                 qc_style = gr.Textbox(
                     label="Describe the voice style",
                     value=DEFAULT_STYLE,
@@ -253,7 +248,7 @@ with gr.Blocks(title="VoiceCloner") as app:
             sources=["microphone", "upload"],
         )
         mv_ref_text = gr.Textbox(label="Reference transcript (optional)", lines=2)
-        mv_use_design = gr.Checkbox(label="Use VoiceDesign", value=True)
+        mv_use_design = gr.Checkbox(label="Apply style prompt", value=True)
         mv_style = gr.Textbox(label="Voice style", value=DEFAULT_STYLE, lines=2)
         mv_save_btn = gr.Button("Save Voice", variant="primary")
         mv_status = gr.Textbox(label="Status", interactive=False)

@@ -1,53 +1,69 @@
 import torch
-from qwen_tts import Qwen3TTSModel
+from voxcpm import VoxCPM
 
 from .device import get_device
 
-DESIGN_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
-CLONE_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+TTS_MODEL_ID = "openbmb/VoxCPM2"
+
+# Legacy aliases — VoxCPM2 collapses the old Qwen3 clone + design models into one
+CLONE_MODEL_ID = TTS_MODEL_ID
+DESIGN_MODEL_ID = TTS_MODEL_ID
+
+
+def _safe_device(device: str) -> str | None:
+    # VoxCPM2 issue #301: mps + bfloat16 emits noise on macOS. Let VoxCPM auto-pick
+    # (it falls back to CPU on darwin) until the upstream bug is fixed.
+    if device == "mps":
+        return None
+    return device
 
 
 class ModelCache:
-    """Lazy-loads and keeps both models alive (for server/Gradio mode)."""
+    """Lazy-loads and keeps the VoxCPM2 model alive (for server/Gradio mode).
+
+    VoxCPM2 is a single model that handles both voice cloning (reference audio)
+    and voice design (natural-language style prompt). `cache.clone` and
+    `cache.design` both return the same underlying model — kept as aliases for
+    backward compatibility with callers from the Qwen3-TTS era.
+    """
 
     def __init__(self, device: str | None = None):
         self.device = device or get_device()
-        self._design = None
-        self._clone = None
+        self._tts = None
 
     @property
-    def design(self):
-        if self._design is None:
-            print(f"Loading VoiceDesign model on {self.device}...")
-            self._design = Qwen3TTSModel.from_pretrained(
-                DESIGN_MODEL_ID, device_map=self.device, dtype=torch.float16
+    def tts(self):
+        if self._tts is None:
+            print(f"Loading VoxCPM2 (device={self.device})...")
+            self._tts = VoxCPM.from_pretrained(
+                TTS_MODEL_ID,
+                load_denoiser=False,
+                device=_safe_device(self.device),
             )
-        return self._design
+        return self._tts
 
     @property
     def clone(self):
-        if self._clone is None:
-            print(f"Loading Clone model on {self.device}...")
-            self._clone = Qwen3TTSModel.from_pretrained(
-                CLONE_MODEL_ID, device_map=self.device, dtype=torch.float32
-            )
-        return self._clone
+        return self.tts
+
+    @property
+    def design(self):
+        return self.tts
 
 
-def load_design_model(device: str | None = None):
+def load_tts_model(device: str | None = None):
     """Standalone loader for CLI one-shot mode."""
     dev = device or get_device()
-    return Qwen3TTSModel.from_pretrained(
-        DESIGN_MODEL_ID, device_map=dev, dtype=torch.float16
+    return VoxCPM.from_pretrained(
+        TTS_MODEL_ID,
+        load_denoiser=False,
+        device=_safe_device(dev),
     )
 
 
-def load_clone_model(device: str | None = None):
-    """Standalone loader for CLI one-shot mode."""
-    dev = device or get_device()
-    return Qwen3TTSModel.from_pretrained(
-        CLONE_MODEL_ID, device_map=dev, dtype=torch.float32
-    )
+# Legacy aliases for callers that still import the Qwen3-era names
+load_clone_model = load_tts_model
+load_design_model = load_tts_model
 
 
 def free_model(model, device: str | None = None):

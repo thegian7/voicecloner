@@ -1,11 +1,12 @@
-"""Download Qwen3-TTS models with JSON progress output for Electron UI."""
+"""Download VoxCPM2 model with JSON progress output for Electron UI."""
 
 import json
 import sys
 from huggingface_hub import snapshot_download
+
+# VoxCPM2 collapses Qwen3's clone + design into a single model.
 MODELS = {
-    "clone": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-    "design": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "voxcpm2": "openbmb/VoxCPM2",
 }
 
 

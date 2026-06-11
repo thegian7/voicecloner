@@ -1,5 +1,5 @@
 """
-Qwen3-TTS Voice Cloner — CLI
+VoxCPM2 Voice Cloner — CLI
 
 Usage:
     python clone.py "Whatever you want it to say"
@@ -11,10 +11,7 @@ Usage:
 import argparse
 
 from core import (
-    load_design_model,
-    load_clone_model,
-    free_model,
-    run_voice_design,
+    load_tts_model,
     create_clone_prompt,
     generate_full,
     save_wav,
@@ -28,14 +25,14 @@ DEFAULT_STYLE = (
 )
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="TomClone TTS")
+    parser = argparse.ArgumentParser(description="VoiceCloner TTS CLI")
     parser.add_argument("text", nargs="?", help="Text to speak")
     parser.add_argument("--file", "-f", help="Read text from a file instead")
     parser.add_argument("-o", "--output", default="output.wav", help="Output filename")
     parser.add_argument("--ref", default=DEFAULT_REF_AUDIO, help="Reference audio file")
     parser.add_argument("--ref-text", default=DEFAULT_REF_TEXT, help="Transcript of reference audio")
-    parser.add_argument("--style", default=DEFAULT_STYLE, help="VoiceDesign style description")
-    parser.add_argument("--no-design", action="store_true", help="Skip VoiceDesign, raw clone only")
+    parser.add_argument("--style", default=DEFAULT_STYLE, help="Voice style description (prepended to prompt)")
+    parser.add_argument("--no-design", action="store_true", help="Skip style prompt, raw clone only")
     args = parser.parse_args()
 
     if args.file:
@@ -46,13 +43,10 @@ if __name__ == "__main__":
     else:
         parser.error("Provide text as an argument or use --file")
 
-    if not args.no_design:
-        design_model = load_design_model()
-        run_voice_design(design_model, args.style)
-        free_model(design_model)
+    style = "" if args.no_design else args.style
 
-    clone_model = load_clone_model()
-    voice_clone_prompt = create_clone_prompt(clone_model, args.ref, args.ref_text)
-    audio, sr = generate_full(text, clone_model, voice_clone_prompt)
+    model = load_tts_model()
+    voice_clone_prompt = create_clone_prompt(model, args.ref, args.ref_text, style=style)
+    audio, sr = generate_full(text, model, voice_clone_prompt)
     save_wav(args.output, audio, sr)
     print(f"Saved {args.output} ({len(audio)/sr:.1f}s, {sr}Hz)")
