@@ -11,6 +11,9 @@ __pycache__/
 *.log
 python/venv/
 
+# Private working docs — market research, monetization specs (do not publish)
+staging/
+
 # Secrets and credentials
 .env
 .env.*
