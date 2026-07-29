@@ -3,6 +3,14 @@ from .models import ModelCache, load_design_model, load_clone_model, load_tts_mo
 from .models import DESIGN_MODEL_ID, CLONE_MODEL_ID, TTS_MODEL_ID
 from .text import prepare_text
 from .audio import crossfade, stitch_chunks, stitch_to_file, save_wav, export_audio
+from .audio import (
+    speech_rms,
+    line_gain,
+    plan_gains,
+    lin_to_dbfs,
+    DEFAULT_TARGET_DBFS,
+    DEFAULT_PEAK_DBFS,
+)
 from .preprocess import preprocess, preprocess_epub, preprocess_file, Chapter
 from .generate import (
     run_voice_design,
@@ -30,6 +38,12 @@ __all__ = [
     "crossfade",
     "stitch_chunks",
     "stitch_to_file",
+    "speech_rms",
+    "line_gain",
+    "plan_gains",
+    "lin_to_dbfs",
+    "DEFAULT_TARGET_DBFS",
+    "DEFAULT_PEAK_DBFS",
     "save_wav",
     "run_voice_design",
     "create_clone_prompt",

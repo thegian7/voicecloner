@@ -32,11 +32,16 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import (
+    DEFAULT_PEAK_DBFS,
+    DEFAULT_TARGET_DBFS,
     ModelCache,
     create_clone_prompt,
     export_audio,
     generate_full,
+    lin_to_dbfs,
+    plan_gains,
     save_wav,
+    speech_rms,
     stitch_to_file,
 )
 
@@ -63,6 +68,21 @@ def _voice_prompt_for(cast: Cast, speaker: str, _cache: dict[str, dict]) -> dict
     )
     _cache[speaker] = prompt
     return prompt
+
+
+def plan_paths(lines: list[ScriptLine], out_dir: str) -> dict[str, list[str]]:
+    """Where each line's WAV lives, without generating anything.
+
+    Same layout generate_lines() writes to. Lets --restitch rebuild a chapter
+    from existing line WAVs without paying the model load.
+    """
+    by_chapter: dict[str, list[str]] = {}
+    for line in lines:
+        chapter_dir = os.path.join(out_dir, _slug(line.chapter))
+        by_chapter.setdefault(line.chapter, []).append(
+            os.path.join(chapter_dir, f"{line.slug}.wav")
+        )
+    return by_chapter
 
 
 def generate_lines(
@@ -116,6 +136,9 @@ def stitch_chapters(
     by_chapter: dict[str, list[str]],
     out_dir: str,
     export_format: str = "wav",
+    normalize: bool = True,
+    target_dbfs: float = DEFAULT_TARGET_DBFS,
+    peak_dbfs: float = DEFAULT_PEAK_DBFS,
 ) -> None:
     """Stitch per-chapter WAVs into one file per chapter."""
     for chapter, wav_paths in by_chapter.items():
@@ -124,9 +147,20 @@ def stitch_chapters(
             print(f"  [stitch] no WAVs for '{chapter}', skipping")
             continue
 
+        gains = None
+        if normalize:
+            gains = plan_gains(existing, target_dbfs=target_dbfs, peak_dbfs=peak_dbfs)
+            adjust = [abs(lin_to_dbfs(g)) for g in gains]
+            print(
+                f"  [norm] {chapter}: {len(gains)} lines to {target_dbfs:.1f} dBFS RMS "
+                f"/ {peak_dbfs:.1f} dBFS peak "
+                f"(gain {lin_to_dbfs(min(gains)):+.1f} to {lin_to_dbfs(max(gains)):+.1f} dB, "
+                f"median move {sorted(adjust)[len(adjust)//2]:.1f} dB)"
+            )
+
         stitched = os.path.join(out_dir, f"{_slug(chapter)}.wav")
         # paragraph_flags=None gives all-standard pauses; works for line-level output
-        sr, dur = stitch_to_file(existing, stitched, paragraph_flags=None)
+        sr, dur = stitch_to_file(existing, stitched, paragraph_flags=None, gains=gains)
         print(f"  [stitch] {chapter}: {len(existing)} lines -> {stitched} ({dur:.1f}s @ {sr}Hz)")
 
         if export_format != "wav":
@@ -144,6 +178,28 @@ def main():
     parser.add_argument("--export", default="wav", choices=["wav", "mp3", "flac", "m4a"])
     parser.add_argument("--no-stitch", action="store_true", help="Skip chapter stitching")
     parser.add_argument("--force", action="store_true", help="Regenerate even if WAV exists")
+    parser.add_argument(
+        "--no-normalize",
+        action="store_true",
+        help="Skip loudness normalization at stitch time (voices will not match)",
+    )
+    parser.add_argument(
+        "--target-dbfs",
+        type=float,
+        default=DEFAULT_TARGET_DBFS,
+        help=f"Per-line RMS target in dBFS (default {DEFAULT_TARGET_DBFS}; ACX wants -23 to -18)",
+    )
+    parser.add_argument(
+        "--peak-dbfs",
+        type=float,
+        default=DEFAULT_PEAK_DBFS,
+        help=f"Peak ceiling in dBFS (default {DEFAULT_PEAK_DBFS}; ACX wants -3 or lower)",
+    )
+    parser.add_argument(
+        "--restitch",
+        action="store_true",
+        help="Re-stitch existing line WAVs without generating anything new",
+    )
     args = parser.parse_args()
 
     print(f"Parsing script: {args.script}")
@@ -176,11 +232,22 @@ def main():
         print(f"  - {ch}: {n} lines")
 
     os.makedirs(args.out, exist_ok=True)
-    by_chapter = generate_lines(lines, cast, args.out, force=args.force)
+    if args.restitch:
+        print("Re-stitch only: using existing line WAVs, generating nothing.")
+        by_chapter = plan_paths(lines, args.out)
+    else:
+        by_chapter = generate_lines(lines, cast, args.out, force=args.force)
 
     if not args.no_stitch:
         print("\nStitching chapters...")
-        stitch_chapters(by_chapter, args.out, export_format=args.export)
+        stitch_chapters(
+            by_chapter,
+            args.out,
+            export_format=args.export,
+            normalize=not args.no_normalize,
+            target_dbfs=args.target_dbfs,
+            peak_dbfs=args.peak_dbfs,
+        )
 
     print("\nDone.")
 
