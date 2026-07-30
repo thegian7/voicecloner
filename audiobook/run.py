@@ -18,11 +18,15 @@ CLI:
     [--export wav|mp3|flac|m4a]  per-chapter export format (default wav)
     [--no-stitch]                generate per-line WAVs but skip chapter stitch
     [--force]                    regenerate even if WAV already exists
+    [--workers N]                generate N lines concurrently (default 1)
+    [--restitch]                 re-stitch existing line WAVs, generate nothing
+    [--no-normalize]             skip loudness matching at stitch time
 """
 
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
 import os
 import re
 import sys
@@ -85,13 +89,133 @@ def plan_paths(lines: list[ScriptLine], out_dir: str) -> dict[str, list[str]]:
     return by_chapter
 
 
+def _generate_shard(payload: tuple) -> dict:
+    """Worker entry point: generate an assigned subset of lines.
+
+    Runs in its own process with its own model copy (~4.6GB), so this trades
+    memory for throughput. Safe to parallelise because every line writes to a
+    distinct path — no coordination needed — and stitch order is recovered
+    separately from the script, not from completion order.
+
+    Must stay module-level and take only picklable args: mp uses 'spawn' here
+    (required for torch on macOS), so the payload is re-pickled per worker.
+    """
+    tag, cast_path, out_dir, force, lines = payload
+    cast = load_cast(cast_path)
+    model_cache = ModelCache()
+    _ = model_cache.tts  # eager load
+    prompt_cache: dict[str, dict] = {}
+
+    stats = {"done": 0, "skipped": 0, "failed": 0, "audio_s": 0.0, "gen_s": 0.0}
+    total = len(lines)
+    for idx, line in enumerate(lines, start=1):
+        chapter_dir = os.path.join(out_dir, _slug(line.chapter))
+        os.makedirs(chapter_dir, exist_ok=True)
+        wav_path = os.path.join(chapter_dir, f"{line.slug}.wav")
+
+        if not force and os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+            stats["skipped"] += 1
+            continue
+
+        try:
+            prompt = _voice_prompt_for(cast, line.speaker, prompt_cache)
+        except KeyError as e:
+            print(f"{tag}[{idx:4d}/{total}] !!! skipping (no voice): {e}", flush=True)
+            stats["failed"] += 1
+            continue
+
+        t0 = time.time()
+        try:
+            audio, sr = generate_full(line.text, model_cache.tts, prompt)
+            save_wav(wav_path, audio, sr)
+            dur = len(audio) / sr
+            elapsed = time.time() - t0
+            stats["done"] += 1
+            stats["audio_s"] += dur
+            stats["gen_s"] += elapsed
+            print(
+                f"{tag}[{idx:4d}/{total}] {line.speaker:10s} "
+                f"{dur:5.1f}s audio / {elapsed:5.1f}s gen "
+                f"({elapsed/max(dur,0.01):.2f}x RT) — {line.text[:44]}...",
+                flush=True,
+            )
+        except Exception as e:
+            print(
+                f"{tag}[{idx:4d}/{total}] FAILED ({type(e).__name__}: {e}) "
+                f"— {line.text[:60]}",
+                flush=True,
+            )
+            stats["failed"] += 1
+    return stats
+
+
+def generate_lines_parallel(
+    lines: list[ScriptLine],
+    cast_path: str,
+    out_dir: str,
+    workers: int,
+    force: bool = False,
+) -> dict[str, list[str]]:
+    """Generate per-line WAVs across `workers` processes.
+
+    Lines are dealt round-robin rather than in contiguous blocks so every worker
+    sees a similar mix of long narration and short dialogue — contiguous blocks
+    would leave one worker holding a run of 30-second narrator lines while
+    another burns through one-word replies.
+    """
+    todo = [
+        ln for ln in lines
+        if force or not (
+            os.path.exists(os.path.join(out_dir, _slug(ln.chapter), f"{ln.slug}.wav"))
+            and os.path.getsize(os.path.join(out_dir, _slug(ln.chapter), f"{ln.slug}.wav")) > 0
+        )
+    ]
+    already = len(lines) - len(todo)
+    if already:
+        print(f"Resuming: {already} line(s) already rendered, {len(todo)} to go.")
+    if not todo:
+        print("All lines already rendered — nothing to generate.")
+        return plan_paths(lines, out_dir)
+
+    shards = [todo[i::workers] for i in range(workers)]
+    shards = [s for s in shards if s]
+    print(
+        f"Generating {len(todo)} line(s) across {len(shards)} worker(s): "
+        f"{[len(s) for s in shards]}"
+    )
+
+    payloads = [
+        (f"w{i} ", cast_path, out_dir, force, s) for i, s in enumerate(shards)
+    ]
+    t0 = time.time()
+    if len(payloads) == 1:
+        results = [_generate_shard(payloads[0])]
+    else:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(len(payloads)) as pool:
+            results = pool.map(_generate_shard, payloads)
+    wall = time.time() - t0
+
+    done = sum(r["done"] for r in results)
+    failed = sum(r["failed"] for r in results)
+    audio_s = sum(r["audio_s"] for r in results)
+    print(
+        f"\nGenerated {done} line(s) ({audio_s/60:.1f} min audio) in {wall/60:.1f} min "
+        f"= {audio_s/max(wall,0.01):.2f}x realtime"
+        + (f" — {failed} FAILED" if failed else "")
+    )
+    if failed:
+        print("Re-run the same command to retry only the failures (existing WAVs are skipped).")
+    return plan_paths(lines, out_dir)
+
+
 def generate_lines(
     lines: list[ScriptLine],
     cast: Cast,
     out_dir: str,
     force: bool = False,
 ) -> dict[str, list[str]]:
-    """Generate per-line WAVs. Returns {chapter_name: [wav_path_in_order]}."""
+    """Generate per-line WAVs serially. Returns {chapter_name: [wav_path_in_order]}."""
     model_cache = ModelCache()
     _ = model_cache.tts  # eager load
     prompt_cache: dict[str, dict] = {}
@@ -200,6 +324,16 @@ def main():
         action="store_true",
         help="Re-stitch existing line WAVs without generating anything new",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help=(
+            "Generate this many lines concurrently, one model copy per worker "
+            "(~4.6GB each). Default 1. On Apple Silicon 2 measured fastest; "
+            "3+ contends for the GPU and gives back most of the gain."
+        ),
+    )
     args = parser.parse_args()
 
     print(f"Parsing script: {args.script}")
@@ -235,6 +369,10 @@ def main():
     if args.restitch:
         print("Re-stitch only: using existing line WAVs, generating nothing.")
         by_chapter = plan_paths(lines, args.out)
+    elif args.workers > 1:
+        by_chapter = generate_lines_parallel(
+            lines, args.cast, args.out, workers=args.workers, force=args.force
+        )
     else:
         by_chapter = generate_lines(lines, cast, args.out, force=args.force)
 
