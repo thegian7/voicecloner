@@ -7,6 +7,7 @@ import os
 import gradio as gr
 
 from core import stitch_to_file, export_audio
+from core.acx import export_acx
 from .state import BookState, TEMP_DIR
 
 
@@ -23,9 +24,38 @@ def export_audiobook(
     if not approved:
         raise gr.Error("No approved chunks to export. Generate and approve chunks first.")
 
+    if fmt == "acx":
+        # ACX wants one file per chapter, mastered and checked.
+        return _export_acx(book)
     if per_chapter:
         return _export_per_chapter(book, fmt)
     return _export_single(book, approved, fmt)
+
+
+def _export_acx(book: BookState) -> tuple[list[str], str]:
+    """One ACX-mastered 192 kbps CBR mono MP3 per chapter, each checked against the spec."""
+    paths: list[str] = []
+    lines: list[str] = []
+    for ch_name in book.chapter_names:
+        ch_approved = [c for c in book.chunks if c.chapter == ch_name and c.approved and c.audio_path]
+        if not ch_approved:
+            continue
+        safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in ch_name).strip()
+        wav_path = os.path.join(TEMP_DIR, f"{safe_name}.wav")
+        stitch_to_file(
+            [c.audio_path for c in ch_approved if c.audio_path],
+            wav_path,
+            paragraph_flags=[c.is_para_end for c in ch_approved],
+        )
+        mp3_path = os.path.join(TEMP_DIR, f"{safe_name}.mp3")
+        report = export_acx(wav_path, mp3_path)
+        paths.append(mp3_path)
+        lines.append(f"{ch_name}: {report.summary()}")
+    if not paths:
+        raise gr.Error("No approved chapters to export.")
+    passed = sum(1 for l in lines if "ACX PASS" in l)
+    head = f"ACX export: {len(paths)} chapters, {passed} pass Audible's checks"
+    return paths, head + "\n" + "\n".join(lines)
 
 
 def _export_single(book: BookState, approved, fmt: str) -> tuple[str, str]:

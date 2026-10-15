@@ -11,6 +11,8 @@ Record a few seconds of your voice, then generate speech in your voice from any 
 - **Voice Library** -- Save and manage multiple cloned voices
 - **Style prompts** -- Natural-language voice descriptions ("warm energetic podcast host") that condition the clone
 - **Export** -- WAV, MP3, FLAC, M4A output formats (48 kHz studio quality)
+- **ACX / Audible export** -- one MP3 per chapter, mastered to ACX spec (44.1 kHz mono, 192 kbps CBR,
+  RMS -23..-18 dBFS, peak <= -3 dBFS, room tone head/tail) and checked; the export status lists PASS/FAIL per chapter
 - **Runs locally** -- All inference happens on your machine (MPS/CUDA/CPU)
 
 ## Quick Start (Python)

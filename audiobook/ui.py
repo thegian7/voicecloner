@@ -321,7 +321,10 @@ def build_app() -> gr.Blocks:
             with gr.Row():
                 export_fmt = gr.Dropdown(
                     label="Format",
-                    choices=["wav", "mp3", "flac", "m4a"],
+                    choices=[
+                        ("WAV", "wav"), ("MP3", "mp3"), ("FLAC", "flac"), ("M4A", "m4a"),
+                        ("ACX / Audible (MP3 per chapter, mastered + checked)", "acx"),
+                    ],
                     value="wav",
                 )
                 export_per_chapter = gr.Checkbox(
