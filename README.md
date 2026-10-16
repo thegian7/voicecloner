@@ -64,10 +64,11 @@ python tts_server.py --voice "MyVoice" --port 8765
 
 ## Speaker LoRA (fine-tuned voices)
 
-A saved voice can carry a LoRA fine-tuned on that speaker with VoxCPM's own trainer
-(`scripts/train_voxcpm_finetune.py` in the VoxCPM repo, `conf/voxcpm_v2/voxcpm_finetune_lora.yaml`).
+A saved voice can carry a LoRA fine-tuned on that speaker with VoxCPM's own trainer.
 A few hours of the speaker's natural speech gives a voice that is noticeably closer than a
-clone from one reference clip. Attach the checkpoint to a saved voice:
+clone from one reference clip. [`training/`](training/README.md) has the pipeline: ingest
+recordings, keep only the clips of the target speaker, train inside memory limits, and
+compare checkpoints. Attach the checkpoint to a saved voice:
 
 ```bash
 python -c 'from core.voices import attach_lora; attach_lora("MyVoice", "path/to/ckpt/step_0001000")'

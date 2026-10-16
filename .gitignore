@@ -24,3 +24,12 @@ credentials.json
 *.p12
 *.pfx
 settings.local.json
+
+# Speaker-LoRA training data: recordings, transcripts and checkpoints of real people.
+# Training dirs live outside the repo; these catch a --root pointed inside it by mistake.
+training/**/data/
+training/**/runs/
+training/**/models/
+training/**/hf/
+*.flac
+*.pcm
