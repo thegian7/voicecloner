@@ -1,16 +1,24 @@
 import shutil
 import subprocess
+from functools import lru_cache
 
 import numpy as np
 import soundfile as sf
+
+
+@lru_cache(maxsize=8)
+def _fade_ramps(n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Linear fade-out / fade-in ramps of length n, cached (every stitch reuses the same few lengths)."""
+    out, inn = np.linspace(1.0, 0.0, n, dtype=np.float32), np.linspace(0.0, 1.0, n, dtype=np.float32)
+    out.flags.writeable = inn.flags.writeable = False  # shared between callers
+    return out, inn
 
 
 def crossfade(a: np.ndarray, b: np.ndarray, overlap_samples: int) -> np.ndarray:
     """Crossfade two audio arrays over overlap_samples."""
     if overlap_samples <= 0 or len(a) < overlap_samples or len(b) < overlap_samples:
         return np.concatenate([a, b])
-    fade_out = np.linspace(1.0, 0.0, overlap_samples, dtype=a.dtype)
-    fade_in = np.linspace(0.0, 1.0, overlap_samples, dtype=b.dtype)
+    fade_out, fade_in = _fade_ramps(overlap_samples)
     blended = a[-overlap_samples:] * fade_out + b[:overlap_samples] * fade_in
     return np.concatenate([a[:-overlap_samples], blended, b[overlap_samples:]])
 
@@ -49,8 +57,7 @@ def stitch_chunks(
         silence = np.zeros(int(sr * gap / 1000), dtype=np.float32)
 
         if overlap > 0 and len(prev_tail) == overlap and len(chunk) >= overlap:
-            fade_out = np.linspace(1.0, 0.0, overlap, dtype=np.float32)
-            fade_in = np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+            fade_out, fade_in = _fade_ramps(overlap)
             blended = prev_tail * fade_out + chunk[:overlap] * fade_in
             parts.append(silence)
             parts.append(blended)
@@ -270,8 +277,7 @@ def stitch_to_file(
 
             # Crossfade prev_tail with start of this chunk
             if overlap > 0 and len(prev_tail) == overlap and len(chunk) >= overlap:
-                fade_out = np.linspace(1.0, 0.0, overlap, dtype=np.float32)
-                fade_in = np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+                fade_out, fade_in = _fade_ramps(overlap)
                 blended = prev_tail * fade_out + chunk[:overlap] * fade_in
                 out.write(silence)
                 out.write(blended)

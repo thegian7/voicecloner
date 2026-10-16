@@ -15,6 +15,12 @@ TTS_MODEL_ID = "openbmb/VoxCPM2"
 CLONE_MODEL_ID = TTS_MODEL_ID
 DESIGN_MODEL_ID = TTS_MODEL_ID
 
+# Default voice-style description offered in the UIs and the CLI.
+DEFAULT_STYLE = (
+    "A young excited American male with a warm energetic tone, "
+    "speaking with enthusiasm and confidence like a podcast host"
+)
+
 
 def _safe_device(device: str) -> str | None:
     # VoxCPM2 issue #301: mps + bfloat16 emits noise on macOS. Let VoxCPM auto-pick

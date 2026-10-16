@@ -1,6 +1,6 @@
 from .device import get_device
 from .models import ModelCache, load_design_model, load_clone_model, load_tts_model, free_model
-from .models import DESIGN_MODEL_ID, CLONE_MODEL_ID, TTS_MODEL_ID
+from .models import DESIGN_MODEL_ID, CLONE_MODEL_ID, TTS_MODEL_ID, DEFAULT_STYLE
 from .text import prepare_text
 from .audio import crossfade, stitch_chunks, stitch_to_file, save_wav, export_audio
 from .audio import (
@@ -34,6 +34,7 @@ __all__ = [
     "DESIGN_MODEL_ID",
     "CLONE_MODEL_ID",
     "TTS_MODEL_ID",
+    "DEFAULT_STYLE",
     "prepare_text",
     "crossfade",
     "stitch_chunks",

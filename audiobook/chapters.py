@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import gradio as gr
+import re
 
 from core import preprocess, preprocess_file, prepare_text, Chapter
+from . import session
 from .state import BookState, ChunkState
 
 
 def load_file(file_path: str | None) -> tuple[list[Chapter], list[str]]:
     """Load an EPUB or TXT file and return (chapters, label_list)."""
     if file_path is None:
-        raise gr.Error("Please upload a file.")
+        raise ValueError("Please upload a file.")
     chapters = preprocess_file(file_path)
     if not chapters:
-        raise gr.Error("No text could be extracted from the file.")
+        raise ValueError("No text could be extracted from the file.")
     labels = [f"{i + 1}. {ch.title}" for i, ch in enumerate(chapters)]
     return chapters, labels
 
@@ -22,12 +23,18 @@ def load_file(file_path: str | None) -> tuple[list[Chapter], list[str]]:
 def load_pasted_text(book_text: str) -> tuple[list[Chapter], list[str]]:
     """Preprocess pasted text and return (chapters, label_list)."""
     if not book_text.strip():
-        raise gr.Error("Please paste your book text first.")
+        raise ValueError("Please paste your book text first.")
     chapters = preprocess(book_text)
     if not chapters:
-        raise gr.Error("No text could be extracted.")
+        raise ValueError("No text could be extracted.")
     labels = [f"{i + 1}. {ch.title}" for i, ch in enumerate(chapters)]
     return chapters, labels
+
+
+def _chapter_index(label: str) -> int | None:
+    """0-based chapter index from a label like '3. Chapter Title', or None."""
+    m = re.match(r"^(\d+)\.", label)
+    return int(m.group(1)) - 1 if m else None
 
 
 def chunk_chapters(
@@ -37,9 +44,14 @@ def chunk_chapters(
 ) -> BookState:
     """Chunk selected chapters into BookState, applying pronunciation dict."""
     if not selected_labels:
-        raise gr.Error("Select at least one chapter.")
+        raise ValueError("Select at least one chapter.")
 
-    selected_indices = {int(s.split(".")[0]) - 1 for s in selected_labels}
+    selected_indices = {
+        i for i in map(_chapter_index, selected_labels)
+        if i is not None and 0 <= i < len(chapters)
+    }
+    if not selected_indices:
+        raise ValueError("None of the selected chapters exist any more. Reload the text.")
     book.chunks = []
 
     for idx in sorted(selected_indices):
@@ -54,6 +66,8 @@ def chunk_chapters(
                     is_para_end=raw.endswith("\n\n"),
                 )
             )
+    session.start()  # a new book replaces the last saved session
+    book.save()
     return book
 
 
@@ -61,11 +75,12 @@ def edit_chunk_text(book: BookState, chunk_idx: int, new_text: str) -> BookState
     """Update the text for a single chunk (clears its audio so it must be regenerated)."""
     idx = int(chunk_idx)
     if idx < 0 or idx >= len(book.chunks):
-        raise gr.Error(f"Invalid chunk index: {idx + 1}")
+        raise ValueError(f"Invalid chunk index: {idx + 1}")
     chunk = book.chunks[idx]
     new_text = new_text.strip()
     if new_text and new_text != chunk.text:
         chunk.text = new_text
         chunk.audio_path = None
         chunk.approved = False
+        book.save()
     return book

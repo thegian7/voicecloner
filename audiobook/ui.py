@@ -5,13 +5,31 @@ Guided wizard: Voice Setup -> Load Text -> Review Chunks -> Generate & Review ->
 
 from __future__ import annotations
 
+import functools
+
 import gradio as gr
 
+from . import session
 from .state import BookState, DEFAULT_STYLE
 from . import voice as voice_mod
 from . import chapters as ch_mod
 from . import generate as gen_mod
 from . import export as export_mod
+
+
+# ---------------------------------------------------------------------------
+# Error bridge: the audiobook modules raise ValueError (so the CLI and tests can use
+# them without Gradio); handlers turn it into a message the UI shows.
+# ---------------------------------------------------------------------------
+
+def _ui(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ValueError as e:
+            raise gr.Error(str(e)) from e
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -43,16 +61,19 @@ def _build_chapter_progress(book: BookState) -> str:
 # Handler wrappers (bridge between Gradio events and business logic)
 # ---------------------------------------------------------------------------
 
+@_ui
 def _on_setup_voice(ref_audio, ref_text, style_text, use_design):
     prompt, status = voice_mod.setup_voice(ref_audio, ref_text, style_text, use_design)
     return prompt, status
 
 
+@_ui
 def _on_preview_voice(voice_prompt, preview_text):
     path = voice_mod.preview_voice(voice_prompt, preview_text)
     return path
 
 
+@_ui
 def _on_load_file(file_path):
     chapters, labels = ch_mod.load_file(file_path)
     return (
@@ -62,6 +83,7 @@ def _on_load_file(file_path):
     )
 
 
+@_ui
 def _on_load_paste(book_text):
     chapters, labels = ch_mod.load_pasted_text(book_text)
     return (
@@ -71,6 +93,7 @@ def _on_load_paste(book_text):
     )
 
 
+@_ui
 def _on_chunk(chapters_list, selected, book: BookState, pronunciation_text):
     book.update_pronunciation(pronunciation_text)
     book = ch_mod.chunk_chapters(chapters_list, selected, book)
@@ -78,34 +101,50 @@ def _on_chunk(chapters_list, selected, book: BookState, pronunciation_text):
     return book, progress_md, gr.update(visible=True)
 
 
+@_ui
 def _on_generate_all(book: BookState, voice_prompt, progress=gr.Progress()):
     book = gen_mod.generate_all(book, voice_prompt, progress)
     return book, _build_chapter_progress(book), _render_review(book)
 
 
+@_ui
 def _on_regenerate(book: BookState, voice_prompt, chunk_num):
     idx = int(chunk_num) - 1
     book = gen_mod.regenerate_chunk(book, voice_prompt, idx)
     return book, _build_chapter_progress(book), _render_review(book)
 
 
+@_ui
 def _on_edit_chunk(book: BookState, chunk_num, new_text):
     idx = int(chunk_num) - 1
     book = ch_mod.edit_chunk_text(book, idx, new_text)
     return book, _build_chapter_progress(book), _render_review(book)
 
 
+@_ui
 def _on_toggle_approve(book: BookState, chunk_num):
     idx = int(chunk_num) - 1
     book = gen_mod.toggle_approve(book, idx)
     return book, _build_chapter_progress(book), _render_review(book)
 
 
+@_ui
 def _on_approve_all(book: BookState):
     book = gen_mod.approve_all(book)
     return book, _build_chapter_progress(book), _render_review(book)
 
 
+@_ui
+def _on_resume():
+    book = BookState.resume()
+    if book is None or not book.chunks:
+        raise ValueError("No saved session to resume.")
+    status = session.summary([vars(c) for c in book.chunks])
+    return (book, _build_chapter_progress(book), _render_review(book),
+            book.pronunciation_as_text(), status)
+
+
+@_ui
 def _on_export(book: BookState, fmt, per_chapter):
     result, status = export_mod.export_audiobook(book, fmt=fmt, per_chapter=per_chapter)
     if isinstance(result, list):
@@ -256,6 +295,9 @@ def build_app() -> gr.Blocks:
 
         # ===== Tab 3: Generate & Review =====
         with gr.Tab("3. Generate & Review"):
+            with gr.Row():
+                resume_btn = gr.Button("Resume Last Session")
+                resume_status = gr.Markdown()
             progress_display = gr.Markdown("*Load and chunk text first.*")
 
             with gr.Row():
@@ -289,6 +331,11 @@ def build_app() -> gr.Blocks:
                 outputs=[book_state, progress_display, gen_all_btn],
             )
 
+            resume_btn.click(
+                fn=_on_resume,
+                inputs=[],
+                outputs=[book_state, progress_display, review_display, pronunciation_box, resume_status],
+            )
             gen_all_btn.click(
                 fn=_on_generate_all,
                 inputs=[book_state, voice_prompt_state],

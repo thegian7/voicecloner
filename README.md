@@ -8,6 +8,7 @@ Record a few seconds of your voice, then generate speech in your voice from any 
 
 - **Quick Clone** -- Record or upload 5-10 seconds of your voice, type text, get speech output
 - **Audiobook Mode** -- Load an EPUB or paste text, chunk it into chapters, generate and review audio per-chunk, export a stitched audiobook
+- **Crash recovery** -- Audiobook progress (chunk audio and approvals) is saved as you go to `~/.voicecloner/audiobook_session/`; "Resume Last Session" picks up after a crash or a closed tab
 - **Voice Library** -- Save and manage multiple cloned voices
 - **Style prompts** -- Natural-language voice descriptions ("warm energetic podcast host") that condition the clone
 - **Export** -- WAV, MP3, FLAC, M4A output formats (48 kHz studio quality)

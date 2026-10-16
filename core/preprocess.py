@@ -4,6 +4,7 @@ Handles EPUB import, chapter detection, abbreviation/number expansion,
 and quote normalization to produce clean text for TTS.
 """
 
+import os
 import re
 from dataclasses import dataclass
 
@@ -256,7 +257,18 @@ def preprocess_epub(path: str) -> list[Chapter]:
 
 
 def preprocess_file(path: str) -> list[Chapter]:
+    """Load an EPUB or UTF-8 text file. Unreadable input raises ValueError with a readable message."""
+    name = os.path.basename(path)
+    if not os.path.isfile(path):
+        raise ValueError(f"File not found: {name}")
     if path.lower().endswith(".epub"):
-        return preprocess_epub(path)
-    with open(path, encoding="utf-8") as f:
-        return preprocess(f.read())
+        try:
+            raw = extract_epub(path)
+        except Exception as e:  # ebooklib/zipfile raise a zoo of types for a bad EPUB
+            raise ValueError(f"Could not read {name} as an EPUB: {e}") from e
+        return preprocess(raw)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return preprocess(f.read())
+    except UnicodeDecodeError as e:
+        raise ValueError(f"{name} isn't UTF-8 text. Save it as UTF-8, or use an EPUB.") from e

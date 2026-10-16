@@ -5,7 +5,6 @@ from __future__ import annotations
 import tempfile
 
 import soundfile as sf
-import gradio as gr
 
 from core import ModelCache, create_clone_prompt, generate_preview, save_wav
 from .state import TEMP_DIR
@@ -25,7 +24,7 @@ def setup_voice(
     Returns (voice_prompt, status_text).
     """
     if ref_audio is None:
-        raise gr.Error("Please upload reference audio.")
+        raise ValueError("Please upload reference audio.")
 
     if isinstance(ref_audio, tuple):
         sr_in, audio_data = ref_audio
@@ -43,7 +42,7 @@ def setup_voice(
 def preview_voice(voice_prompt, preview_text: str) -> str | None:
     """Generate a short preview clip and return the file path."""
     if voice_prompt is None:
-        raise gr.Error("Set up your voice first.")
+        raise ValueError("Set up your voice first.")
     text = preview_text.strip() or "Hello! This is a preview of your cloned voice."
     audio, sr = generate_preview(text, cache.clone, voice_prompt)
     path = tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=TEMP_DIR).name

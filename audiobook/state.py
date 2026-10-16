@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import re
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+
+from core import DEFAULT_STYLE  # noqa: F401  (re-exported for the UI)
+from . import session
 
 
+# Previews and exports. Chunk audio lives in the session dir (see session.py) so it
+# survives a crash.
 TEMP_DIR = tempfile.mkdtemp(prefix="audiobook_")
-
-DEFAULT_STYLE = (
-    "A young excited American male with a warm energetic tone, "
-    "speaking with enthusiasm and confidence like a podcast host"
-)
 
 # Common TTS-friendly replacements
 DEFAULT_PRONUNCIATION: dict[str, str] = {
@@ -81,6 +81,24 @@ class BookState:
     def chunks_for_chapter(self, chapter: str) -> list[tuple[int, ChunkState]]:
         """Return (global_index, chunk) pairs for a chapter."""
         return [(i, c) for i, c in enumerate(self.chunks) if c.chapter == chapter]
+
+    # --- crash recovery (see session.py) ---
+
+    def save(self) -> None:
+        """Persist the chunk list so the session can be resumed after a crash."""
+        session.save([asdict(c) for c in self.chunks], self.pronunciation)
+
+    @classmethod
+    def resume(cls) -> BookState | None:
+        """The last saved session, or None if there isn't one."""
+        saved = session.load()
+        if saved is None:
+            return None
+        chunks, pronunciation = saved
+        return cls(
+            chunks=[ChunkState(**c) for c in chunks],
+            pronunciation=pronunciation or dict(DEFAULT_PRONUNCIATION),
+        )
 
     def progress_summary(self) -> dict[str, dict[str, int]]:
         """Per-chapter counts: pending / generated / approved."""

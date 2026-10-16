@@ -11,6 +11,7 @@ import soundfile as sf
 import gradio as gr
 
 from core import (
+    DEFAULT_STYLE,
     ModelCache,
     create_clone_prompt,
     generate_full,
@@ -24,11 +25,6 @@ from core import (
 )
 
 cache = ModelCache()
-
-DEFAULT_STYLE = (
-    "A young excited American male with a warm energetic tone, "
-    "speaking with enthusiasm and confidence like a podcast host"
-)
 
 TEMP_DIR = tempfile.mkdtemp(prefix="voicecloner_")
 

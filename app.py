@@ -6,6 +6,7 @@ Then open http://localhost:7860
 
 import gc
 import os
+import re
 import tempfile
 
 import torch
@@ -13,6 +14,7 @@ import soundfile as sf
 import gradio as gr
 
 from core import (
+    DEFAULT_STYLE,
     ModelCache,
     create_clone_prompt,
     generate_single,
@@ -29,13 +31,9 @@ from core import (
     load_voice,
     delete_voice,
 )
+from audiobook import session
 
 cache = ModelCache()
-
-DEFAULT_STYLE = (
-    "A young excited American male with a warm energetic tone, "
-    "speaking with enthusiasm and confidence like a podcast host"
-)
 
 TEMP_DIR = tempfile.mkdtemp(prefix="voicecloner_")
 
@@ -122,8 +120,13 @@ def load_text_file(file_path):
     """Load a .txt file into the text input."""
     if file_path is None:
         return gr.update()
-    with open(file_path, encoding="utf-8") as f:
-        return gr.update(value=f.read())
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            return gr.update(value=f.read())
+    except UnicodeDecodeError:
+        raise gr.Error("That file isn't UTF-8 text. Save it as UTF-8 and try again.")
+    except OSError as e:
+        raise gr.Error(f"Could not read the file: {e.strerror or e}")
 
 
 # ── Audiobook tab functions (from audiobook.py) ──────────────────────
@@ -132,7 +135,10 @@ def load_text_file(file_path):
 def load_book_file(file_path):
     if file_path is None:
         raise gr.Error("Please upload a file.")
-    chapters = preprocess_file(file_path)
+    try:
+        chapters = preprocess_file(file_path)
+    except ValueError as e:
+        raise gr.Error(str(e))
     if not chapters:
         raise gr.Error("No text could be extracted from the file.")
     labels = [f"{i+1}. {ch.title}" for i, ch in enumerate(chapters)]
@@ -160,7 +166,13 @@ def load_pasted_text(book_text):
 def chunk_selected_chapters(chapters, selected):
     if not selected:
         raise gr.Error("Select at least one chapter.")
-    selected_indices = {int(s.split(".")[0]) - 1 for s in selected}
+    # labels look like "3. Chapter Title"; titles can contain dots and digits too
+    selected_indices = {
+        int(m.group(1)) - 1 for m in (re.match(r"^(\d+)\.", s) for s in selected) if m
+    }
+    selected_indices = {i for i in selected_indices if 0 <= i < len(chapters)}
+    if not selected_indices:
+        raise gr.Error("None of the selected chapters exist any more. Reload the text.")
     all_chunks = []
     for idx in sorted(selected_indices):
         ch = chapters[idx]
@@ -178,6 +190,8 @@ def chunk_selected_chapters(chapters, selected):
         }
         for c in all_chunks
     ]
+    session.start()  # a new book replaces the last saved session
+    session.save(state)
     current_ch = None
     lines = []
     for i, s in enumerate(state):
@@ -198,6 +212,31 @@ def setup_voice(ref_audio, ref_text, style, use_design):
     return prompt, "Voice setup complete. Ready to generate."
 
 
+def _free_gpu():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
+def _generate_chunk(state, chunk, voice_prompt, name):
+    """Generate one chunk into the session dir, then save the session for crash recovery.
+
+    GPU memory is released even if generation fails.
+    """
+    try:
+        audio, sr = generate_single(cache.clone, chunk["text"], voice_prompt)
+        path = session.chunk_path(name)
+        save_wav(path, audio, sr)
+        del audio
+    finally:
+        _free_gpu()
+    chunk["audio_path"] = path
+    chunk["approved"] = False
+    session.save(state)
+
+
 def generate_all(state, voice_prompt, progress=gr.Progress()):
     if voice_prompt is None:
         raise gr.Error("Please set up your voice first (Step 2).")
@@ -209,18 +248,8 @@ def generate_all(state, voice_prompt, progress=gr.Progress()):
         if chunk["audio_path"] and chunk["approved"]:
             results.append(chunk)
             continue
-        audio, sr = generate_single(cache.clone, chunk["text"], voice_prompt)
-        path = os.path.join(TEMP_DIR, f"chunk_{i:04d}.wav")
-        save_wav(path, audio, sr)
-        chunk["audio_path"] = path
-        chunk["approved"] = False
+        _generate_chunk(state, chunk, voice_prompt, f"chunk_{i:04d}.wav")
         results.append(chunk)
-        del audio
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            torch.mps.empty_cache()
 
     return results, _build_review_md(results)
 
@@ -230,24 +259,14 @@ def regenerate_chunk(state, voice_prompt, chunk_idx):
         raise gr.Error("Set up voice first.")
     idx = int(chunk_idx)
     chunk = state[idx]
-    audio, sr = generate_single(cache.clone, chunk["text"], voice_prompt)
-    path = os.path.join(TEMP_DIR, f"chunk_{idx:04d}_regen.wav")
-    save_wav(path, audio, sr)
-    del audio
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        torch.mps.empty_cache()
-    chunk["audio_path"] = path
-    chunk["approved"] = False
-    state[idx] = chunk
+    _generate_chunk(state, chunk, voice_prompt, f"chunk_{idx:04d}_regen.wav")
     return state, _build_review_md(state)
 
 
 def toggle_approve(state, chunk_idx):
     idx = int(chunk_idx)
     state[idx]["approved"] = not state[idx]["approved"]
+    session.save(state)
     return state, _build_review_md(state)
 
 
@@ -255,7 +274,17 @@ def approve_all(state):
     for chunk in state:
         if chunk["audio_path"]:
             chunk["approved"] = True
+    session.save(state)
     return state, _build_review_md(state)
+
+
+def resume_session():
+    saved = session.load()
+    if saved is None or not saved[0]:
+        raise gr.Error("No saved session to resume.")
+    state = saved[0]
+    return (state, gr.update(value=session.summary(state), visible=True),
+            gr.update(visible=True), _build_review_md(state))
 
 
 def _build_review_md(state):
@@ -463,7 +492,9 @@ with gr.Blocks(title="VoiceCloner") as app:
             choices=[],
             visible=False,
         )
-        ab_chunk_btn = gr.Button("Chunk Selected Chapters", variant="primary", visible=False)
+        with gr.Row():
+            ab_chunk_btn = gr.Button("Chunk Selected Chapters", variant="primary", visible=False)
+            ab_resume_btn = gr.Button("Resume Last Session", variant="secondary")
         ab_chunk_display = gr.Markdown("", visible=False)
 
         with gr.Group(visible=False) as ab_gen_group:
@@ -520,6 +551,11 @@ with gr.Blocks(title="VoiceCloner") as app:
             fn=chunk_selected_chapters,
             inputs=[ab_chapters_state, ab_chapter_selector],
             outputs=[ab_chunks_state, ab_chunk_display, ab_chunk_display, ab_gen_group],
+        )
+        ab_resume_btn.click(
+            fn=resume_session,
+            inputs=[],
+            outputs=[ab_chunks_state, ab_chunk_display, ab_gen_group, ab_review_display],
         )
         ab_gen_all_btn.click(
             fn=generate_all,

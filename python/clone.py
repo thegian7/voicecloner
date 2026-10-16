@@ -11,6 +11,7 @@ Usage:
 import argparse
 
 from core import (
+    DEFAULT_STYLE,
     load_tts_model,
     create_clone_prompt,
     generate_full,
@@ -19,10 +20,6 @@ from core import (
 
 DEFAULT_REF_AUDIO = "reference_excited.wav"
 DEFAULT_REF_TEXT = "Hello! What up everybody, hope you are having an awesome day!"
-DEFAULT_STYLE = (
-    "A young excited American male with a warm energetic tone, "
-    "speaking with enthusiasm and confidence like a podcast host"
-)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="VoiceCloner TTS CLI")
