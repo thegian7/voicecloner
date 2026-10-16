@@ -4,6 +4,8 @@ import numpy as np
 
 from .text import prepare_text
 from .audio import stitch_chunks
+from .models import use_lora
+from .voices import lora_for_ref
 
 
 # Generation defaults. VoxCPM2 docs recommend cfg_value=2.0 and 7-10 timesteps.
@@ -22,16 +24,22 @@ def run_voice_design(model, style: str) -> None:
     return None
 
 
-def create_clone_prompt(model, ref_audio: str, ref_text: str = "", style: str = "") -> dict:
+def create_clone_prompt(model, ref_audio: str, ref_text: str = "", style: str = "",
+                        lora_path: str | None = None) -> dict:
     """Build a voice prompt for VoxCPM2.
 
     Returns a plain dict rather than a model-specific prompt object — VoxCPM2
     doesn't pre-compute prompts; it just needs the paths/strings at generate time.
+
+    lora_path: a LoRA checkpoint dir for this speaker. Left as None, it is looked
+    up from the reference recording (a saved voice with a LoRA attached); pass ""
+    to force the plain clone.
     """
     return {
         "ref_audio": ref_audio,
         "ref_text": ref_text or "",
         "style": (style or "").strip(),
+        "lora": lora_for_ref(ref_audio) if lora_path is None else lora_path,
     }
 
 
@@ -54,6 +62,7 @@ def generate_single(model, text: str, voice_prompt: dict) -> tuple[np.ndarray, i
     # With a reference audio the model often reads the description aloud instead
     # of using it as a cue — so we drop it. The reference IS the voice character.
     styled = text if ref_audio else _styled_text(text, voice_prompt.get("style", ""))
+    use_lora(model, voice_prompt.get("lora", ""))
 
     audio = model.generate(
         text=styled,
@@ -145,6 +154,7 @@ def generate_voice_design(
     if not description.strip():
         raise ValueError("description must be non-empty for voice-design generation")
     styled = f"({description.strip()}){sample_text}"
+    use_lora(model, "")  # a designed voice must not inherit the last speaker's LoRA
     audio = model.generate(
         text=styled,
         cfg_value=DEFAULT_CFG,
@@ -165,6 +175,7 @@ def generate_stream(
     """
     ref_audio = voice_prompt.get("ref_audio")
     ref_text = voice_prompt.get("ref_text", "")
+    use_lora(model, voice_prompt.get("lora", ""))
     sr = _sample_rate(model)
 
     text_chunks = prepare_text(text)

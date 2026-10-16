@@ -64,6 +64,24 @@ source .venv/bin/activate
 python tts_server.py --voice "MyVoice" --port 8765
 ```
 
+## Speaker LoRA (fine-tuned voices)
+
+A saved voice can carry a LoRA fine-tuned on that speaker with VoxCPM's own trainer.
+A few hours of the speaker's natural speech gives a voice that is noticeably closer than a
+clone from one reference clip. [`training/`](training/README.md) has the pipeline: ingest
+recordings, keep only the clips of the target speaker, train inside memory limits, and
+compare checkpoints. Attach the checkpoint to a saved voice:
+
+```bash
+python -c 'from core.voices import attach_lora; attach_lora("MyVoice", "path/to/ckpt/step_0001000")'
+```
+
+That copies `lora_weights.safetensors` and `lora_config.json` into
+`~/.voicecloner/voices/MyVoice/lora/`. From then on, anything generated from that voice's
+reference recording uses the LoRA, in the app, the TTS server, audiobooks and the CLI. The
+first LoRA voice in a session rebuilds the model with LoRA layers (once, ~30 s); other voices
+switch the LoRA off. Pass `lora_path=""` to `create_clone_prompt` to force a plain clone.
+
 ## Project Structure
 
 ```

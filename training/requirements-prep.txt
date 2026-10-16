@@ -1,0 +1,9 @@
+# Data-prep venv (prep_segments.py, build_manifest.py, eval_sim.py). Kept apart from the
+# app's venv: speechbrain and Whisper pull in versions the app doesn't need.
+# Install torch/torchaudio for the box first (CUDA wheels), then:
+#   pip install -r training/requirements-prep.txt
+# Versions are the ones the pipeline was tested with.
+silero-vad==6.2.3
+speechbrain==1.1.2
+transformers==5.8.1
+soundfile==0.13.1

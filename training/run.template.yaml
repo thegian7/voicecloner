@@ -1,0 +1,33 @@
+# VoxCPM2 speaker-LoRA run. train.sh fills in the @...@ values and writes runs/<run>/run.yaml.
+# Tested settings: ~3 h of clips, 1000 steps, ~7.3 GB peak.
+pretrained_path: @BASE_MODEL@
+train_manifest: @ROOT@/data/train.jsonl
+val_manifest: @ROOT@/data/val.jsonl
+sample_rate: 16000        # AudioVAE encoder input rate; must match audio_vae_config.sample_rate
+out_sample_rate: 48000    # AudioVAE decoder output rate; used for TensorBoard audio logging
+batch_size: 1
+grad_accum_steps: 16
+num_workers: 2
+num_iters: @STEPS@
+log_interval: 10
+valid_interval: 250
+save_interval: 250
+learning_rate: 0.0001
+weight_decay: 0.01
+warmup_steps: 100
+max_steps: @STEPS@
+max_batch_tokens: 8192
+max_grad_norm: 1.0        # gradient clipping max norm; 0 = disabled
+save_path: @RUN_DIR@/ckpt
+tensorboard: @RUN_DIR@/tb
+lambdas:
+  loss/diff: 1.0
+  loss/stop: 1.0
+
+lora:
+  enable_lm: true
+  enable_dit: true
+  enable_proj: false
+  r: 32
+  alpha: 32
+  dropout: 0.0
